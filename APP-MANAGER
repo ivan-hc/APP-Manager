@@ -418,6 +418,52 @@ _am_newrepo_check "$@"
 ################################################################################
 
 third_party_flags_message=""
+
+################################
+# TOOLPACKS
+################################
+
+toolpack_repo="https://github.com/Azathothas/Toolpacks"
+toolpack_readme="https://meta.pkgforge.dev/external/am/${ARCH}-Linux.AM.txt"
+[ -n "$toolpack_readme" ] && third_party_flags="$third_party_flags --toolpacks"
+[ -n "$toolpack_readme" ] && third_party_flags_message="$third_party_flags_message\n
+${Gold}--toolpacks\033[0m
+
+	${LightBlue}$AMCLI -a --toolpacks {PROGRAM}\033[0m
+	${LightBlue}$AMCLI -i --toolpacks {PROGRAM}\033[0m
+	${LightBlue}am -i --toolpacks --user {PROGRAM}\033[0m
+	${LightBlue}$AMCLI -l --toolpacks\033[0m
+	${LightBlue}$AMCLI -q --toolpacks {KEYWORD}\033[0m
+
+Description: This is a flag to use in \"-i\" to install Toolpacks programs, in \"-a\" to see more info about each program, in \"-l\" to list all available Toolpacks, and \"-q\" to search the Toolpacks list. Toolpacks is a collection of programs external to the \"AM\" database. Visit $toolpack_repo to learn more.
+
+NOTE, for installations you can use \".toolpacks\" as the package extension instead of using the flag.
+"
+
+_sync_toolpacks_list() {
+	rm -f "$AMDATADIR/$ARCH-toolpacks"
+	[ -n "$toolpack_readme" ] && curl -Ls "$toolpack_readme" | grep -v "appimage" | cut -d":" -f1 | cut -d"@" -f2 \
+	| sed 's/^| /◆ /g; s/#[^ ]*//; s/ | https$/. To install it use the "--toolpacks" flag./g; s/ | / : /g' | sort > "$AMDATADIR/$ARCH-toolpacks" \
+	|| touch "$AMDATADIR/$ARCH-toolpacks"
+}
+
+[ "$2" = --toolpacks ] && _online_check && curl -Ls "$AMREPO"/extra-modules/toolpacks.am > "$CACHEDIR/toolpacks.am"
+[ "$2" = --toolpacks ] && MODULE="toolpacks.am"
+
+################################
+# ALL THE ABOVE
+################################
+
+_completion_list_third_party() {
+	[ -f "$AMDATADIR"/"$ARCH"-toolpacks ] && awk '{print $2}' "$AMDATADIR"/"$ARCH"-toolpacks | sed -e 's/$/.toolpacks/' >> "$AMDATADIR"/list
+}
+
+_sync_third_party_lists() {
+	_sync_toolpacks_list
+}
+
+export awk_name="1" awk_description="2" awk_site="3" awk_dl="4" awk_ver="5" # Numbers to use in "awk" to determine columns
+
 [ -z "$third_party_flags_message" ] && third_party_flags_message="none\n"
 
 ################################################################################
@@ -429,12 +475,13 @@ available_options="about add apikey backup clean config disable downgrade downlo
 	install install-appimage launcher list lock neodb newrepo nolibfuse off on overwrite purge query remove sandbox \
 	select sync template test unhide unlock update --all --appimages --apps --byname --config --convert --debug \
 	--devmode-disable --devmode-enable --disable-notifications --enable-notifications --force-latest --home --icons \
-	-ias --launcher --less --pkg --rollback --disable-sandbox --sandbox --system --user"
+	-ias --launcher --less --pkg --rollback --disable-sandbox --sandbox --system --user $third_party_flags"
 
 _completion_lists() {
 	# Remove existing lists and download new ones
 	curl -Ls "$APPSLISTDB" > "$AMDATADIR/$ARCH-apps"
 	awk -v FS="(◆ | : )" '{print $2}' <"$AMDATADIR"/"$ARCH"-apps > "$AMDATADIR"/list
+	_completion_list_third_party
 	# Append options to the list
 	for o in $available_options; do
 		echo "$o" >> "$AMDATADIR"/list
@@ -806,6 +853,7 @@ _sync_appimages_list() {
 _sync_databases() {
 	printf "%b\n Check and update offline lists of additional databases...\n" "$DIVIDING_LINE"
 	_sync_appimages_list
+	_sync_third_party_lists 2>/dev/null
 	_completion_lists
 }
 
@@ -1094,7 +1142,7 @@ _use_force_latest() {
 # HANDLE ALL THE EXTERNAL MODULES
 _use_module() {
 	# Test if module exists
-	if [ ! -f "$MODULES_PATH/$MODULE" ]; then
+	if [ ! -f "$MODULES_PATH/$MODULE" ] || [ ! -f "$CACHEDIR/$MODULE" ]; then
 		_online_check
 		if ! wget -q "$MODULES_SOURCE/$MODULE" -O "$MODULES_PATH/$MODULE"; then
 			echo " Module not found, run \"$AMCLI -s\" to update \"$AMCLIUPPER\""
@@ -1103,7 +1151,7 @@ _use_module() {
 		chmod a+x "$MODULES_PATH/$MODULE"
 	fi
 	# Source module
-	source "$MODULES_PATH/$MODULE" "$@"
+	source "$MODULES_PATH/$MODULE" "$@" || [ -f "$CACHEDIR/$MODULE" ] && source "$CACHEDIR/$MODULE" "$@"
 }
 
 case "$1" in
@@ -1114,10 +1162,11 @@ case "$1" in
 		echo " Run the \"$AMCLI -h\" command to find out more"
 		exit 0
 		;;
-	'about'|'-a'|\
-	'files'|'-f'|'-fi'|\
-	'list'|'-l'|\
-	'query'|'-q')
+	'about'|'-a'|'list'|'-l'|'query'|'-q')
+		[ -z "$MODULE" ] && MODULE="database.am"
+		if [ -t 1 ]; then _use_module "$@"; else _use_module "$@" | sed -e 's/\x1b\[[0-9;]*m//g'; fi
+		;;
+	'files'|'-f'|'-fi')
 		MODULE="database.am"
 		if [ -t 1 ]; then _use_module "$@"; else _use_module "$@" | sed -e 's/\x1b\[[0-9;]*m//g'; fi
 		;;
@@ -1139,11 +1188,14 @@ case "$1" in
 		MODULE="sandboxes.am"
 		_use_module "$@"
 		;;
-	'download'|'-d'|\
-	'extra'|'-e'|\
-	'install'|'-i'|'-ias'|\
-	'install-appimage'|'-ia')
+	'download'|'-d'|'extra'|'-e'|'-ias'|'install-appimage'|'-ia')
 		MODULE="install.am"
+		_online_check
+		[ "$CLI" = am ] && [ -f "$APPMANCONFIG"/appman-mode ] && printf "%b" "$APPMAN_MSG"
+		_use_module "$@"
+		;;
+	'install'|'-i')
+		[ -z "$MODULE" ] && MODULE="install.am"
 		_online_check
 		[ "$CLI" = am ] && [ -f "$APPMANCONFIG"/appman-mode ] && printf "%b" "$APPMAN_MSG"
 		_use_module "$@"
@@ -1358,7 +1410,7 @@ case "$1" in
 
 					${LightBlue}$AMCLI -q {KEYWORD}
 					${LightBlue}$AMCLI -q --appimages {KEYWORD}
-					${LightBlue}$AMCLI -q --pkg {PROGRAM1} {PROGRAM2}[0m
+					${LightBlue}$AMCLI -q --pkg {PROGRAM1} {PROGRAM2}\033[0m
 
 			Description: Search for keywords in the list of available applications, add the \"--appimages\" option to list only the AppImages or add \"--pkg\" to list multiple programs at once.
 
